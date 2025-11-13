@@ -1,0 +1,617 @@
+---
+title: "Homework 9 Modeling Practice - Continuation of Homework 8"
+author: "Powell Braddock, ST 558"
+format: html
+editor: visual
+---
+
+# Homework 8 Portion
+
+In this assignment, we are looking at the Seoul Bike Data from the UCI Machine Learning Repository. We are looking at the following variables of interest:
+
+• Date : day/month/year
+
+• Rented Bike count - Count of bikes rented at each hour
+
+• Hour - Hour of the day
+
+• Temperature-Temperature in Celsius
+
+• Humidity - %
+
+• Windspeed - m/s
+
+• Visibility - 10m
+
+• Dew point temperature - Celsius
+
+• Solar radiation - MJ/m2
+
+• Rainfall - mm
+
+• Snowfall - cm
+
+• Seasons - Winter, Spring, Summer, Autumn
+
+• Holiday - Holiday/No holiday
+
+• Functional Day - NoFunc(Non Functional Hours), Fun(Functional hours)
+
+## Reading in the Data
+
+Let's look at the data using read_csv. We have to use the locale encoding of latin1 because of the degree symbol for temperature variables.
+
+```{r}
+library(tidyverse)
+
+#originally got an error: what I think came from the degree symbol in one of the attributes.  the wild internet provided the locale = latin1 solution!
+seoul_bike_data <- read_csv('https://www4.stat.ncsu.edu/~online/datasets/SeoulBikeData.csv', locale = locale(encoding = 'latin1'))
+seoul_bike_data
+```
+
+## EDA
+
+Now we must *check* the data... I'm starting with check for missingness: looks like we have na_counts of zero across the board for all columns! Whoop whoop whoop!
+
+```{r}
+sum_na <- function(column){
+  sum(is.na(column) + is.null(column) + is.nan(column))
+}
+na_counts <- seoul_bike_data |>
+  summarize(across(everything(), sum_na))
+na_counts
+```
+
+Now, we must check the column types and the values within the columns to make sure they make sense. I'm using the psych package's describe() for basic summary statistics for numeric columns. I'm checking the unique values for the categorical variables using unique().
+
+```{r}
+library(psych)
+psych::describe(seoul_bike_data)
+unique(seoul_bike_data$Seasons)
+unique(seoul_bike_data$Holiday) 
+unique(seoul_bike_data$`Functioning Day`)
+```
+
+Let's convert the Date column into an actual date using the dmy() function from the lubridate package.
+
+```{r}
+library(lubridate)
+seoul_bike_date <-
+  seoul_bike_data |> mutate(Date = dmy(Date))
+```
+
+Now, we want to turn the character variables (Seasons, Holiday, and Functioning Day) into factors (remember those unique values from before?). We can rename all the variables to be lower snake case too.
+
+```{r}
+seoul_bike_data<-
+seoul_bike_data |>
+  mutate(Seasons = as.factor(Seasons),
+         Holiday = as.factor(Holiday),
+         `Functioning Day` = as.factor(`Functioning Day`)) |>
+  rename('date'='Date',
+         'rented_bike_count' = 'Rented Bike Count',
+         'hour' = 'Hour',
+         'celcius_temp' = 'Temperature(°C)',
+         'percent_humidity'='Humidity(%)',
+         'wind_speed'= 'Wind speed (m/s)',
+         'visib'='Visibility (10m)',
+         'dew_point_temp' = 'Dew point temperature(°C)',
+         'solar_rad'='Solar Radiation (MJ/m2)',
+         'rainfall' = 'Rainfall(mm)',
+         'snowfall' = 'Snowfall (cm)',
+         'seasons' = 'Seasons',
+         'holiday' = 'Holiday',
+         'function_day' = 'Functioning Day')
+```
+
+Onto creating summary statistics. The first contingency table is the data grouped by Functioning Day across Rented Bike Count with descriptive summaries of mean, median, variance, standard deviation, and interquartile range.
+
+Wow! When functioning day is 'no', there were no bike rentals. Bike rentals only occurred on functioning days of 'yes'.
+
+```{r}
+seoul_bike_data |>
+  group_by(function_day) |>
+  summarize(across(rented_bike_count, .fns = list("mean" = mean, 
+                                       "median" = median, 
+                                       "var" = var, 
+                                       "sd" = sd, 
+                                       "IQR" = IQR), .names = "{.fn}_{.col}"))
+```
+
+This time, we will only look at functioning days of 'yes' where we summarize grouped by seasons and holiday variables. All four seasons have rented bike counts associated with them.
+
+```{r}
+seoul_bike_data |>
+  group_by(seasons, holiday) |>
+  filter(function_day == 'Yes') |>
+  summarize(across(rented_bike_count, .fns = list("mean" = mean, 
+                                       "median" = median, 
+                                       "var" = var, 
+                                       "sd" = sd, 
+                                       "IQR" = IQR), .names = "{.fn}_{.col}"))
+```
+
+Now, we’ll summarize across the hours so that each day has one observation associated with it. We are grouping by Date.
+
+```{r}
+seoul_bike_data |>
+  group_by(date) |>
+  filter(function_day == 'Yes') |>
+  summarize(across(rented_bike_count, .fns = list("mean" = mean, 
+                                       "median" = median), .names = "{.fn}_{.col}"))
+```
+
+Now let's group across date, seasons, and holiday variables for the sums of rented bike count, rainfall, and snowfall and the averages of the weather variables.
+
+```{r}
+new_bike_data <- seoul_bike_data |>
+  group_by(date, seasons, holiday) |>
+  summarize(across(c(rented_bike_count,
+                     rainfall,
+                     snowfall), 
+                   .fns=list('sum'=sum), 
+                   .names = "{.fn}_{.col}"),
+            across(c(celcius_temp, 
+                     percent_humidity,
+                     wind_speed,
+                     visib,
+                     dew_point_temp, 
+                     solar_rad, 
+                     rainfall,
+                     snowfall), 
+                   .fns = list("mean" = mean), 
+                   .names = "{.fn}_{.col}")) |> 
+  mutate(date = dmy(date))
+
+new_bike_data
+```
+
+Now let's use this data to recreate those basic summary statistics and then create some plots to explore relationships.
+
+First, we will create a contingency table of seasons and holiday variables. Most rented bike counts occurred on 'not' holidays. The highest count of rentals is in the summer for 'not' holidays and winter for holidays.
+
+```{r}
+new_bike_data |>
+  group_by(seasons, holiday)|>
+  summarize(count=n()) |>
+  pivot_wider(names_from = holiday, values_from = count)
+```
+
+We can use psych's describe() function again to get numeric summaries on this new data, like before.
+
+I also defined the numeric variables in the data as num_vars for easier use later.
+
+```{r}
+library(corrr)
+psych::describe(new_bike_data)
+num_vars <- new_bike_data |>
+  select(sum_rented_bike_count, sum_rainfall, sum_snowfall, mean_celcius_temp, mean_percent_humidity, mean_wind_speed, mean_visib, mean_dew_point_temp, mean_solar_rad, mean_rainfall, mean_snowfall)
+num_vars
+```
+
+Now to plot... Let's look at the rented bike count sums by date and holiday! Both the scatterplot and the overlapping holiday linear regression plots show an increase in the rental counts as the year goes on.
+
+```{r}
+ggplot(new_bike_data, 
+       aes(x=date, y=sum_rented_bike_count, color=holiday)) + 
+  geom_point() + geom_smooth(method='lm') +
+  scale_x_date(date_labels = "%B %d, %Y") +
+  labs(title='Rented Bike Count Summed per Day in Seoul Scatterplot', x='Date',y='Rented Bike Count')
+```
+
+```{r}
+ggplot(new_bike_data, 
+       aes(x=mean_rainfall, y=sum_rented_bike_count, color=mean_visib)) + 
+  geom_point() + 
+  labs(title='Rented Bike Count Summed per Day Versus \nMean Rainfall and Mean Visibility in Seoul Scatterplot', x='Rainfall - mm',y='Rented Bike Count')
+```
+
+Now let's check where the x axis is mean snowfall and mean wind speed. The majority of bike rentals occur when there is no snowfall and low wind speed. There are a few dates with snowfall and rentals, but they mostly have lower wind speeds.
+
+```{r}
+ggplot(new_bike_data, 
+       aes(x=mean_snowfall, y=sum_rented_bike_count, color=mean_wind_speed)) + 
+  geom_point() + 
+  labs(title='Rented Bike Count Summed per Day Versus \nMean Snowfall and Mean Wind Speed in Seoul Scatterplot', x='Rainfall - mm',y='Rented Bike Count')
+```
+
+OOOh, a correlation matrix of the numeric variables we defined before.
+
+As expected, mean rainfall and sum rainfall are very correlated, as well as mean snowfall and sum snowfall.
+
+Mean Celcius Temp and Mean Dew Point Temp are also super correlated (0.96).
+
+The most correlated variable with the Sum Rented Bike Count is Mean Celcius Temp. Let's look at this and the next most correlated variable: solar radiation!
+
+```{r}
+cor_matrix <- correlate(num_vars)
+cor_matrix <- shave(cor_matrix)
+rplot(cor_matrix, print_cor = TRUE) + 
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+This is certainly a correlated relationship! The higher temperature has higher rental counts and higher solar radiation. Who would have thought?
+
+```{r}
+ggplot(new_bike_data, 
+       aes(x=mean_celcius_temp, y=sum_rented_bike_count, color=mean_solar_rad)) + 
+  geom_point() + 
+  labs(title='Rented Bike Count Summed per Day Versus \nMean Temperature and Mean Solar Radiation \nin Seoul Scatterplot', x='Temperature in Celcius',y='Rented Bike Count')
+```
+
+Makes sense, because dew point temperature looks to be correlated as well.
+
+```{r}
+ggplot(new_bike_data, 
+       aes(x=mean_celcius_temp, y=sum_rented_bike_count, color=mean_dew_point_temp)) + 
+  geom_point() + 
+  labs(title='Rented Bike Count Summed per Day Versus \nMean Temperature and Mean Dew Point Temperature \nin Seoul Scatterplot', x='Temperature in Celcius',y='Rented Bike Count')
+```
+
+# Split the Data
+
+Here, we can use functions from tidymodels to split the data into a training and test set (75/25 split). By using the strata argument, we can stratify the split on the seasons variable.
+
+```{r}
+library(tidymodels)
+seoul_data <- initial_split(new_bike_data, prop = 0.75, strata=seasons)
+seoul_train <- training(seoul_data)
+seoul_train
+seoul_test <- testing(seoul_data)
+seoul_test
+```
+
+Now we can look further into the training set and create a 10 fold CV split.
+
+```{r}
+nrow(seoul_train)
+size_fold <- floor(nrow(seoul_train)/10)
+size_fold
+set.seed(8)
+random_indices <- sample(1:nrow(seoul_train), size = nrow(seoul_train), replace = FALSE)
+#see the random reordering
+head(random_indices)
+#create a list to save our folds in
+folds <- list()
+#now cycle through our random indices vector and take the appropriate observations to each fold
+#you may want to set i to 1 and run the arguments to from and to in the seq() function
+#change i to 2 and do the same thing to see how this works
+for(i in 1:10){
+  if (i < 10) {
+    fold_index <- seq(from = (i-1)*size_fold +1, to = i*size_fold, by = 1)
+    folds[[i]] <- seoul_train[random_indices[fold_index], ]
+  } else { #for i = 10 we need to have 1 more observation 
+    fold_index <- seq(from = (i-1)*size_fold +1, to = length(random_indices), by = 1)
+    folds[[i]] <- seoul_train[random_indices[fold_index], ]
+  }
+}
+folds[[1]]
+folds[[2]]
+```
+
+```{r}
+#training data
+train_list <- folds
+length(train_list)
+```
+
+# Fitting MLR Models
+
+First, let’s create some recipes for our different models. For the 1st recipe: we're ignoring the date variable for modeling (day_type) and removing it after we create a weekday/weekend (factor) variable. We can use step_normalize to standardize the numeric variables since their scales are pretty different and create dummy variables for the seasons, holiday, and our new day type variable using step_dummy.
+
+```{r}
+seoul_train_rec_1 <- 
+  recipe(sum_rented_bike_count ~ ., data=seoul_train) |>
+  update_role(date, new_role = 'ID') |>
+  step_mutate(
+    day_name = wday(date, label=TRUE),
+    day_type = factor(
+      ifelse(
+        day_name %in% c('Mon', 'Tue', 'Wed','Thu','Fri'), 
+        'Weekday',
+        'Weekend')
+      )
+    ) |>
+  step_dummy(seasons, holiday, day_type, one_hot = FALSE)|>
+  step_normalize(all_numeric_predictors()) |>
+  step_rm(day_name)
+seoul_train_rec_1
+```
+
+For the 2nd recipe we are beginning with the same steps as before, but also adding in interactions between seasons and holiday, seasons and temp, temp and rainfall.
+
+```{r}
+seoul_train_rec_2 <- 
+  recipe(sum_rented_bike_count ~ ., data=seoul_train) |>
+  update_role(date, new_role = 'ID') |>
+  step_mutate(
+    day_name = wday(date, label=TRUE),
+    day_type = factor(
+      ifelse(
+        day_name %in% c('Mon', 'Tue', 'Wed','Thu','Fri'), 
+        'Weekday',
+        'Weekend')
+      )
+    ) |>
+  step_dummy(seasons, holiday, day_type, one_hot = FALSE)|>
+  step_normalize(all_numeric_predictors()) |>
+  step_rm(day_name)|>
+step_interact(
+  terms = ~ (`seasons_Spring` + `seasons_Summer` + `seasons_Winter`):`holiday_No.Holiday` +
+           (`seasons_Spring` + `seasons_Summer` + `seasons_Winter`):mean_celcius_temp +
+           mean_celcius_temp:mean_rainfall
+)
+seoul_train_rec_2
+```
+
+For the 3rd recipe: we are adding in quadratic terms for each numeric predictor using step_poly.
+
+```{r}
+
+seoul_train_rec_3 <- 
+  recipe(sum_rented_bike_count ~ ., data=seoul_train) |>
+  update_role(date, new_role = 'ID') |>
+  step_mutate(
+    day_name = wday(date, label=TRUE),
+    day_type = factor(
+      ifelse(
+        day_name %in% c('Mon', 'Tue', 'Wed','Thu','Fri'), 
+        'Weekday',
+        'Weekend')
+      )
+    ) |>
+  step_dummy(seasons, holiday, day_type, one_hot = FALSE)|>
+  step_normalize(all_numeric_predictors()) |>
+  step_rm(day_name)|>
+  step_interact(
+  terms = ~ (`seasons_Spring` + `seasons_Summer` + `seasons_Winter`):`holiday_No.Holiday` +
+           (`seasons_Spring` + `seasons_Summer` + `seasons_Winter`):mean_celcius_temp +
+           mean_celcius_temp:mean_rainfall
+)|>
+  step_poly(sum_rainfall, sum_snowfall, mean_celcius_temp, mean_percent_humidity, 
+          mean_wind_speed, mean_visib, mean_dew_point_temp, mean_solar_rad, 
+          mean_rainfall, mean_snowfall, degree = 2) 
+  
+seoul_train_rec_3
+```
+
+Now we will set up our linear model fit to use the “lm” engine as seoul_mod.
+
+```{r}
+seoul_mod <-linear_reg() |>
+  set_engine('lm')
+```
+
+We can use this to create a workflow using the recipe and this model (for all three models).
+
+```{r}
+seoul_wfl1 <- workflow() |>
+  add_recipe(seoul_train_rec_1) |>
+  add_model(seoul_mod)
+seoul_wfl1
+seoul_wfl2 <- workflow() |>
+  add_recipe(seoul_train_rec_2) |>
+  add_model(seoul_mod)
+seoul_wfl2
+seoul_wfl3 <- workflow() |>
+  add_recipe(seoul_train_rec_3) |>
+  add_model(seoul_mod)
+seoul_wfl3
+```
+
+Let's check out the fits on the training data using the three different workflows:
+
+```{r}
+seoul_fit1 <- seoul_wfl1 |>
+  fit(seoul_train)
+seoul_fit1 |>
+  tidy()
+
+```
+
+```{r}
+seoul_fit2 <- seoul_wfl2 |>
+  fit(seoul_train)
+seoul_fit2 |>
+  tidy()
+```
+
+```{r}
+seoul_fit3 <- seoul_wfl3 |>
+  fit(seoul_train)
+seoul_fit3|>
+  tidy()
+```
+
+We can fit the models using 10 fold CV via fit_resamples() and look at the training set CV error to choose a best model—looks like the model 1!
+
+```{r}
+seoul_10_fold <- vfold_cv(seoul_train, 10)
+cv_fits1 <- seoul_wfl1 |>
+  fit_resamples(seoul_10_fold)
+cv_fits2 <- seoul_wfl2 |>
+  fit_resamples(seoul_10_fold)
+cv_fits3 <- seoul_wfl3 |>
+  fit_resamples(seoul_10_fold)
+rbind(cv_fits1 |> collect_metrics() |> filter(.metric == 'rmse'),
+      cv_fits2 |> collect_metrics() |> filter(.metric == 'rmse'),
+      cv_fits3 |> collect_metrics() |> filter(.metric == 'rmse')) |>
+  mutate(Model= c('Model 1', 'Model 2', 'Model 3')) |>
+  select(Model, mean, n, std_err)
+```
+
+Model 1 is the ‘best’ model, so let's fit the model to the entire training data set. The 2x4 tibble is the computed RMSE (and RSQ) metric on the test set.
+
+The final model is fit on the entire training set and its coefficient table is the final displayed tibble (using extract_fit_parsnip() and tidy()).
+
+```{r}
+best_mod_fit <- last_fit(seoul_wfl1, split=seoul_data)
+collect_metrics(best_mod_fit)
+best_mod_fit |>
+  extract_fit_parsnip() |>
+  tidy()
+```
+
+I would be interested to learn more about why the p value of mean_solar_rad is so small, followed by rainfall and wind speed.
+
+Overall, interesting assignment!
+
+# Homework 9 Begins Here
+
+You should add (using the first recipe from homework 8 with no quadratics nor interactions):
+
+• a (tuned) LASSO model: where LASSO is a similar model to the MLR model but involves a tuning parameter.
+
+(note: I got all the same rmse values for every tuning value)
+
+```{r}
+LASSO_Seoul <- linear_reg(penalty = tune(), mixture=1) |>
+  set_engine('glmnet')
+LASSO_wkf <- workflow() |>
+  add_recipe(seoul_train_rec_1) |>
+  add_model(LASSO_Seoul)
+LASSO_wkf
+
+
+```
+
+```{r}
+LASSO_grid <- LASSO_wkf |>
+  tune_grid(resamples = seoul_10_fold, 
+            grid = grid_regular(penalty(), levels = 200))
+```
+
+```{r}
+LASSO_grid |>
+  collect_metrics() |>
+  filter(.metric == 'rmse') |>
+  ggplot(aes(penalty, mean, color=.metric)) + geom_line()
+```
+
+Let's pull out the 'best' model using select_best() and finalize_workflow().
+
+```{r}
+lowest_rmse_LASSO <- LASSO_grid |>
+  select_best(metric = 'rmse')
+lowest_rmse_LASSO
+
+```
+
+Now we can fit that 'best' LASSO model on the entire training set, seoul_train. finalize_workflow() has captured the tuned model we defined before.
+
+```{r}
+LASSO_final <- LASSO_wkf |>
+  finalize_workflow(lowest_rmse_LASSO) |>
+  fit(seoul_train)
+tidy(LASSO_final)
+```
+
+Now we can compare the chosen model on the test set using last_fit() and see the differences between our MLR model from Homework 8 and this LASSO model. It appears that the MLR Model outperforms the LASSO Model slightly.
+
+```{r}
+seoul_wfl1 |>
+  last_fit(seoul_data) |>
+  collect_metrics()
+LASSO_wkf |>
+  finalize_workflow(lowest_rmse_LASSO) |>
+  last_fit(seoul_data) |>
+  collect_metrics()
+```
+
+```{r}
+LASSO_final |>
+  predict(seoul_test) |>
+  pull() |>
+  rmse_vec(truth = seoul_test$sum_rented_bike_count)
+LASSO_wkf <- LASSO_wkf |>
+  finalize_workflow(tibble(penalty = lowest_rmse_LASSO$penalty)) 
+LASSO_model <- LASSO_wkf |>
+  fit(data = new_bike_data)
+tidy(LASSO_model)
+```
+
+• a (tuned) Regression Tree model
+
+```{r}
+library(tree)
+tree_mod <- decision_tree(tree_depth = tune(),
+                          min_n = 20,
+                          cost_complexity = tune()) |>
+  set_engine("rpart") |>
+  set_mode("regression")
+tree_wkf <- workflow() |>
+  add_recipe(seoul_train_rec_1) |>
+  add_model(tree_mod)
+temp_tree <- tree_wkf |> 
+  tune_grid(resamples = seoul_10_fold) #uses defaults from dials
+temp_tree |> 
+  collect_metrics()
+tree_grid <- grid_regular(cost_complexity(),
+                          tree_depth(),
+                          levels = c(10, 5))
+tree_fits <- tree_wkf |> 
+  tune_grid(resamples = seoul_10_fold,
+            grid = tree_grid)
+tree_fits |> collect_metrics()
+```
+
+```{r}
+tree_fits |>
+  collect_metrics() |>
+  filter(.metric == "rmse") |>
+  arrange(mean)
+tree_best_params <- select_best(tree_fits, metric = "rmse")
+tree_best_params
+```
+
+```{r}
+tree_final_wkf <- tree_wkf |>
+  finalize_workflow(tree_best_params)
+tree_final_fit <- tree_final_wkf |>
+  last_fit(seoul_data)
+tree_final_fit
+tree_final_fit |>
+  collect_metrics()
+```
+
+```{r}
+tree_final_model <- extract_workflow(tree_final_fit) 
+tree_final_model
+tree_final_model |>
+  extract_fit_engine() |>
+  rpart.plot::rpart.plot(roundint = FALSE)
+```
+
+```{r}
+rbind(
+  best_mod_fit |>
+    collect_metrics() |> 
+    mutate(Model = "MLR", .before = ".metric"), 
+  # LASSO_model |>
+  #   collect_metrics() |> 
+  #   mutate(Model = "LASSO", .before = ".metric"), 
+  tree_final_fit |>
+    collect_metrics() |> 
+    mutate(Model = "TREE", .before = ".metric")
+)
+```
+
+• a (tuned) Bagged Tree model
+
+• a (tuned) Random Forest model
+
+Each of these models should be fit and tuned on the training set. You should take the best model from each family of models (best LASSO, best Regression tree,...) and fit it to the entire training data set and see how it predicts on the test set. Include your best MLR model from the last homework here.
+
+• Compare all final models on the test set using both rmse and mae (mean absolute error).
+
+• Extract the final model fits for each type and report a summary of each model
+
+– For the LASSO and MLR models, report the final coefficient tables
+
+– For the regression tree model, give a plot of the final fit
+
+– For the bagged tree and random forest models, produce a variable importance plot
+
+∗ For the random forest model, this is a bit complicated. Check this out and see if you can getit to work.
+
+For the overall best model, fit it to the entire data set!
