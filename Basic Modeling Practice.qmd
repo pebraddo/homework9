@@ -445,7 +445,7 @@ Model 1 is the ‘best’ model, so let's fit the model to the entire training d
 The final model is fit on the entire training set and its coefficient table is the final displayed tibble (using extract_fit_parsnip() and tidy()).
 
 ```{r}
-best_mod_fit <- last_fit(seoul_wfl1, split=seoul_data)
+best_mod_fit <- last_fit(seoul_wfl1, split=seoul_data, metrics = metric_set(rmse, mae))
 collect_metrics(best_mod_fit)
 best_mod_fit |>
   extract_fit_parsnip() |>
@@ -458,11 +458,7 @@ Overall, interesting assignment!
 
 # Homework 9 Begins Here
 
-You should add (using the first recipe from homework 8 with no quadratics nor interactions):
-
-• a (tuned) LASSO model: where LASSO is a similar model to the MLR model but involves a tuning parameter.
-
-(note: I got all the same rmse values for every tuning value)
+We will use the first recipe (seoul_train_rec_1) from homework 8 with no quadratics nor interactions to tune our **LASSO Model**. Let's use the glmnet engine and the linear_reg function with a mixture of 1 (specifies LASSO instead of Elastic Net) and an opportunity to tune the penalty with a resampling method.
 
 ```{r}
 LASSO_Seoul <- linear_reg(penalty = tune(), mixture=1) |>
@@ -475,20 +471,25 @@ LASSO_wkf
 
 ```
 
+Now, we can great a grid that tunes based on the resamples of the CV-10-fold with 200 levels.
+
 ```{r}
 LASSO_grid <- LASSO_wkf |>
   tune_grid(resamples = seoul_10_fold, 
-            grid = grid_regular(penalty(), levels = 200))
+            grid = grid_regular(penalty(), levels = 200),
+            metrics = metric_set(rmse, mae))
 ```
+
+Now, let's plot these grid results with the RMSE metric... Looks like all the RMSE values are the same!
 
 ```{r}
 LASSO_grid |>
   collect_metrics() |>
   filter(.metric == 'rmse') |>
-  ggplot(aes(penalty, mean, color=.metric)) + geom_line()
+  ggplot(aes(penalty, mean, color=.metric)) + geom_line() +labs(title = 'LASSO Grid results for Means associated with Penalty Options')
 ```
 
-Let's pull out the 'best' model using select_best() and finalize_workflow().
+Let's pull out the 'best' model using select_best() by RMSE.
 
 ```{r}
 lowest_rmse_LASSO <- LASSO_grid |>
@@ -518,6 +519,8 @@ LASSO_wkf |>
   collect_metrics()
 ```
 
+Let's check out the RMSE of the model when predicting on a new set of data: the test data. That's the same RMSE as on the combined data. Let's confirm and 'finalize' that model using finalize_workflow and collect metrics on it.
+
 ```{r}
 LASSO_final |>
   predict(seoul_test) |>
@@ -525,12 +528,13 @@ LASSO_final |>
   rmse_vec(truth = seoul_test$sum_rented_bike_count)
 LASSO_wkf <- LASSO_wkf |>
   finalize_workflow(tibble(penalty = lowest_rmse_LASSO$penalty)) 
-LASSO_model <- LASSO_wkf |>
-  fit(data = new_bike_data)
-tidy(LASSO_model)
+LASSO_model <- last_fit(LASSO_wkf, split=seoul_data, metrics = metric_set(rmse, mae))
+LASSO_model|> collect_metrics()
 ```
 
-• a (tuned) Regression Tree model
+To tuning a **Regression Tree** model...
+
+We can use decision_tree from the tree package this time, with the rpart engine specified for regression. Let's tune for the tree_depth and cost_complexity and follow similar steps to the LASSO model, using the recipe from homework 8.
 
 ```{r}
 library(tree)
@@ -543,7 +547,8 @@ tree_wkf <- workflow() |>
   add_recipe(seoul_train_rec_1) |>
   add_model(tree_mod)
 temp_tree <- tree_wkf |> 
-  tune_grid(resamples = seoul_10_fold) #uses defaults from dials
+  tune_grid(resamples = seoul_10_fold,
+            metrics = metric_set(rmse, mae)) #uses defaults from dials
 temp_tree |> 
   collect_metrics()
 tree_grid <- grid_regular(cost_complexity(),
@@ -551,9 +556,12 @@ tree_grid <- grid_regular(cost_complexity(),
                           levels = c(10, 5))
 tree_fits <- tree_wkf |> 
   tune_grid(resamples = seoul_10_fold,
-            grid = tree_grid)
+            grid = tree_grid,
+            metrics = metric_set(rmse, mae))
 tree_fits |> collect_metrics()
 ```
+
+Our best tree fit selected with the RMSE in mind has a cost complexity of 0.001 and a tree depth of 4. We can finalize that workflow and plot it to a tree plot! So fun.
 
 ```{r}
 tree_fits |>
@@ -568,7 +576,7 @@ tree_best_params
 tree_final_wkf <- tree_wkf |>
   finalize_workflow(tree_best_params)
 tree_final_fit <- tree_final_wkf |>
-  last_fit(seoul_data)
+  last_fit(seoul_data, metrics = metric_set(rmse, mae))
 tree_final_fit
 tree_final_fit |>
   collect_metrics()
@@ -582,36 +590,169 @@ tree_final_model |>
   rpart.plot::rpart.plot(roundint = FALSE)
 ```
 
+Ooh La La... a tuned **Bagged Tree** model.
+
+This time, we use bag_tree from the baguette library and do basically the same things as for the tree model.
+
+```{r}
+library(baguette)
+bag_mod <- bag_tree(tree_depth = tune(),
+                          min_n = 20,
+                          cost_complexity = tune()) |>
+  set_engine("rpart") |>
+  set_mode("regression")
+bag_wkf <- workflow() |>
+  add_recipe(seoul_train_rec_1) |>
+  add_model(bag_mod)
+temp_bag <- bag_wkf |> 
+  tune_grid(resamples = seoul_10_fold,
+            metrics = metric_set(rmse, mae)) #uses defaults from dials
+temp_bag |> 
+  collect_metrics()
+bag_grid <- grid_regular(cost_complexity(),
+                          tree_depth(),
+                          levels = c(10, 5))
+bag_fits <- bag_wkf |> 
+  tune_grid(resamples = seoul_10_fold,
+            grid = bag_grid,
+            metrics = metric_set(rmse, mae))
+bag_fits |> collect_metrics()
+```
+
+```{r}
+bag_fits |>
+  collect_metrics() |>
+  #filter(.metric == "rmse") |>
+  arrange(mean)
+bag_best_params <- select_best(bag_fits, metric = 'rmse')
+bag_final_wkf <-
+  bag_wkf |>
+  finalize_workflow(bag_best_params)
+bag_final_fit <- bag_final_wkf |> 
+  last_fit(seoul_data, metrics = metric_set(rmse, mae))
+bag_final_fit$.metrics
+```
+
+Finally, a tuned Random Forest model: it uses the library ranger and rand_forest to tune mtry and trees. Let's check out the comparisons between the models below to learn more!
+
+```{r}
+library(ranger)
+rand_for_mod <- rand_forest(mtry = tune(), trees = tune()) |>
+  set_engine('ranger') |>
+  set_mode('regression')
+rand_for_wkf <- workflow() |>
+  add_recipe(seoul_train_rec_1) |>
+  add_model(rand_for_mod)
+temp_rand_for <- rand_for_wkf|>
+  tune_grid(resamples = seoul_10_fold,
+            grid=7,
+            metrics = metric_set(rmse, mae))
+temp_rand_for |>collect_metrics()
+rand_for_grid <- grid_regular(mtry(c(1, ncol(seoul_train) - 1)), trees())
+rand_for_fits <- rand_for_wkf |>
+  tune_grid(resamples = seoul_10_fold, grid=rand_for_grid,
+            metrics = metric_set(rmse, mae))
+rand_for_fits |> collect_metrics()
+rand_for_fits |>
+  collect_metrics() |>
+  #filter(.metric == 'rmse') |>
+  arrange(mean)
+rand_for_best_params <- select_best(rand_for_fits, metric = 'rmse')
+rand_for_final_wkf <- rand_for_wkf |>finalize_workflow(rand_for_best_params)
+rand_for_final_fit <- rand_for_final_wkf |> last_fit(seoul_data, metrics = metric_set(rmse, mae))
+```
+
+Each of these models are fit and tuned on the training set. The best model from each family of models is then fit it to the entire training data set to see how it predicts on the test set.
+
+All final model's RMSE and MAE are shown in the table below. The Random Forest model has the lowest RMSE and MAE, which would make it my choice for the 'best' model for predicting the bike rentals in Seoul. The second 'best' model would be the Bagged Tree model, with the closest RMSE and MAE values.
+
 ```{r}
 rbind(
-  best_mod_fit |>
-    collect_metrics() |> 
-    mutate(Model = "MLR", .before = ".metric"), 
-  # LASSO_model |>
-  #   collect_metrics() |> 
-  #   mutate(Model = "LASSO", .before = ".metric"), 
+   best_mod_fit |>
+     collect_metrics() |> 
+     mutate(Model = "MLR", .before = ".metric"), 
+  LASSO_model |>
+    collect_metrics() |>
+    mutate(Model = "LASSO", .before = ".metric"),
   tree_final_fit |>
-    collect_metrics() |> 
-    mutate(Model = "TREE", .before = ".metric")
+    collect_metrics() |>
+    mutate(Model = "TREE", .before = ".metric"),
+  bag_final_fit |>
+    collect_metrics() |>
+    mutate(Model = "BAG", .before = ".metric"),
+  rand_for_final_fit |>
+    collect_metrics() |>
+    mutate(Model = "RANDOM FOREST", .before = ".metric")
 )
 ```
 
-• a (tuned) Bagged Tree model
+```         
+```
 
-• a (tuned) Random Forest model
+Below are the extracted final model fits for each type, followed by a summary of each model.
 
-Each of these models should be fit and tuned on the training set. You should take the best model from each family of models (best LASSO, best Regression tree,...) and fit it to the entire training data set and see how it predicts on the test set. Include your best MLR model from the last homework here.
+The MLR model's final coefficient table:
 
-• Compare all final models on the test set using both rmse and mae (mean absolute error).
+```{r}
+best_mod_fit
+best_mod_fit |>
+  extract_fit_parsnip() |>
+  tidy()
+```
 
-• Extract the final model fits for each type and report a summary of each model
+The LASSO model's final coefficient table:
 
-– For the LASSO and MLR models, report the final coefficient tables
+```{r}
+LASSO_final
+LASSO_final |> 
+  extract_fit_parsnip() |>
+  tidy()
+```
 
-– For the regression tree model, give a plot of the final fit
+The Regression Tree model's plot of the final fit:
 
-– For the bagged tree and random forest models, produce a variable importance plot
+```{r}
+tree_preds <- tree_final_fit |> collect_predictions()
+names(tree_preds)
+```
 
-∗ For the random forest model, this is a bit complicated. Check this out and see if you can getit to work.
+```{r}
+tree_preds
+tree_preds |>
+  ggplot(aes(x = sum_rented_bike_count, y=.pred)) +
+  geom_point(alpha = 0.6) + 
+  geom_abline()+
+  labs(title='Actual Rented Bike Count versus Predictions \nfor Regression Tree Model', x='Rented Bike Count', y = 'Predictions for Rented Bike Count')
+```
 
-For the overall best model, fit it to the entire data set!
+The bagged tree model's variable importance plot:
+
+```{r}
+
+bag_final_model <- extract_fit_engine(bag_final_fit) 
+bag_final_model
+bag_final_model$imp |>
+  mutate(term = factor(term, levels = term)) |>
+  ggplot(aes(x = term, y = value)) + 
+  geom_bar(stat ="identity") +
+  coord_flip()
+```
+
+The random forest model's variable importance plot:
+
+```{r}
+rand_for_final_model <- extract_fit_engine(rand_for_final_fit) 
+rand_for_final_model$variable.importance
+
+```
+
+∗ For the random forest model, this is a bit complicated. Check this out and see if you can get it to work.
+
+For the overall best model, the random forest model, here's the fit for the entire data set!
+
+```{r}
+combo <- bind_rows(seoul_test,seoul_train)
+rand_for_final_model_fit_total <- rand_for_final_wkf |>
+  fit(combo)
+rand_for_final_model_fit_total
+```
