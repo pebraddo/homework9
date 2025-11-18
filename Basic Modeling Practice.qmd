@@ -638,7 +638,7 @@ Finally, a tuned Random Forest model: it uses the library ranger and rand_forest
 ```{r}
 library(ranger)
 rand_for_mod <- rand_forest(mtry = tune(), trees = tune()) |>
-  set_engine('ranger') |>
+  set_engine('ranger', importance='impurity') |>
   set_mode('regression')
 rand_for_wkf <- workflow() |>
   add_recipe(seoul_train_rec_1) |>
@@ -686,9 +686,6 @@ rbind(
 )
 ```
 
-```         
-```
-
 Below are the extracted final model fits for each type, followed by a summary of each model.
 
 The MLR model's final coefficient table:
@@ -700,6 +697,8 @@ best_mod_fit |>
   tidy()
 ```
 
+According to the MLR coefficient table, the dew point temperature, followed by the solar radiation, are the two most impactful variables.
+
 The LASSO model's final coefficient table:
 
 ```{r}
@@ -709,21 +708,26 @@ LASSO_final |>
   tidy()
 ```
 
-The Regression Tree model's plot of the final fit:
+According to this table of coefficients, the LASSO model perceives the solar radiation and dew point temperature to have the biggest influence on the accuracy of the prediction.
 
 ```{r}
 tree_preds <- tree_final_fit |> collect_predictions()
 names(tree_preds)
+tree_preds
 ```
 
+The Regression Tree model's plot of the final fit:
+
 ```{r}
-tree_preds
+
 tree_preds |>
   ggplot(aes(x = sum_rented_bike_count, y=.pred)) +
   geom_point(alpha = 0.6) + 
-  geom_abline()+
+  geom_smooth(method='lm')+
   labs(title='Actual Rented Bike Count versus Predictions \nfor Regression Tree Model', x='Rented Bike Count', y = 'Predictions for Rented Bike Count')
 ```
+
+The Regression Tree model shows a positive relationship between the actual rented bike count and the predicted rented bike count, shown by the blue indicator line. There are obvious visual outliers that prevent this line from having a slope of 1.
 
 The bagged tree model's variable importance plot:
 
@@ -735,18 +739,52 @@ bag_final_model$imp |>
   mutate(term = factor(term, levels = term)) |>
   ggplot(aes(x = term, y = value)) + 
   geom_bar(stat ="identity") +
-  coord_flip()
+  coord_flip()+
+  labs(title='Variable Importance for Bagged Tree Model', x='Variable', y='Importance')
+```
+
+Looks like the temperature, solar radiation, and the dew point temperature were deemed the 'most important' by the Bagged tree model, which aligns with the results we anticipated in the correlation matrix from before. Snowfall, holiday/non-holiday, and weekday/weekend were not very relevant variables to the model.
+
+Now, let's break down the Random Forest model with a function to extract the fit to a control grid, then resample the fit using that control grid.
+
+```{r}
+get_rand_for_importance <- function(x) {
+  x |> 
+    extract_fit_parsnip() |>
+    vip::vi()
+}
+
+ctrl_imp <- control_grid(extract = get_rand_for_importance)
+
+cells_resampling <-
+  rand_for_final_wkf |>
+  fit_resamples(seoul_10_fold, control = ctrl_imp)
+cells_resampling
+```
+
+Great, now we can unnest the tibble's nested tibbles in the .extracts column to get the lists 2 levels down.
+
+```{r}
+cells_resampling_2 <- cells_resampling |>
+  select(id, .extracts) |>
+  unnest(.extracts) |>
+  unnest(.extracts) 
+
+cells_resampling_2
+
+
 ```
 
 The random forest model's variable importance plot:
 
 ```{r}
-rand_for_final_model <- extract_fit_engine(rand_for_final_fit) 
-rand_for_final_model$variable.importance
-
+ggplot(cells_resampling_2, aes(x=Variable, y=Importance)) +
+  geom_bar(stat = 'identity')+
+  labs(title='Variable Importance for Random Forest Model', x='Variable', y='Importance') +
+  coord_flip()
 ```
 
-∗ For the random forest model, this is a bit complicated. Check this out and see if you can get it to work.
+Once again, the Random Forest Model dictates the high importance of the temperature, solar radiation, dew point temperature, closely followed by the season being winter! What a cool analysis.
 
 For the overall best model, the random forest model, here's the fit for the entire data set!
 
